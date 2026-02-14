@@ -1,0 +1,63 @@
+# 1. Pre-process Receptor and Ligand
+# --------------------------------------------------------------------
+# Save the protein as A.pdb and repair missing atoms/residues (fixed protein).
+
+
+# 2. Generate Protein Topology
+# --------------------------------------------------------------------
+gmx_mpi pdb2gmx -f MAPK14.pdb -o MAPK14.gro -water tip3p -ff amber99sb-ildn -ignh
+
+
+# 3. Ligand Processing (Generate .gro and .top)
+# --------------------------------------------------------------------
+# Use Sobtop to process the ligand X.mol2 with GAFF force field
+cd sobtop
+chmod +x *
+./sobtop
+# (Select GAFF force field manually in the tool)
+
+
+# 4. Construct Complex and Topology
+# --------------------------------------------------------------------
+# Manually merge protein and ligand coordinates into 'complex.gro'.
+# Incorporate the ligand topology into 'topol.top'. 
+# Insert the ligand position restraint file inclusion at the end of 'topol.top'.
+
+
+# 5. Define Box, Solvate, Add Ions, and Energy Minimization
+# --------------------------------------------------------------------
+# (1) Define box and solvate
+gmx_mpi editconf -f complex.gro -o newbox.gro -c -d 1.0 -bt cubic
+gmx_mpi solvate -cp newbox.gro -cs spc216.gro -p topol.top -o solv.gro
+
+# (2) Add Ions
+# Generate binary input for ion generation
+gmx_mpi grompp -f ions.mdp -c solv.gro -p topol.top -o ions.tpr
+
+# actually add the ions using genion
+# We use 'echo 15' to select group "SOL" automatically (assuming SOL is group 15)
+# Note: You may need to change -pname NA -nname CL depending on your mdp settings
+echo 15 | gmx_mpi genion -s ions.tpr -o solv_ions.gro -p topol.top -pname NA -nname CL -neutral
+
+# (3) Energy Minimization
+gmx_mpi grompp -f em.mdp -c solv_ions.gro -p topol.top -o em.tpr
+gmx_mpi mdrun -v -deffnm em -nb gpu
+
+
+# 6. NVT and NPT Equilibration
+# --------------------------------------------------------------------
+# NVT
+gmx_mpi grompp -f nvt.mdp -c em.gro -r em.gro -p topol.top -n index.ndx -o nvt.tpr
+gmx_mpi mdrun -deffnm nvt -nb gpu
+
+# NPT
+gmx_mpi grompp -f npt.mdp -c nvt.gro -t nvt.cpt -r nvt.gro -p topol.top -n index.ndx -o npt.tpr
+gmx_mpi mdrun -deffnm npt -nb gpu
+
+
+# 7. Production MD Run
+# --------------------------------------------------------------------
+gmx_mpi grompp -f md.mdp -c npt.gro -t npt.cpt -p topol.top -n index.ndx -o md_0_10.tpr
+
+# Run in background
+nohup gmx_mpi mdrun -deffnm md_0_10 -nb gpu -v &
